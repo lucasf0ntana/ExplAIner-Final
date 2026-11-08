@@ -1,0 +1,107 @@
+import ast
+import importlib.util
+import os
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.environ["OPENAI_API_KEY"] = ""
+_SPEC = importlib.util.spec_from_file_location("gerador_questoes", ROOT / "backend" / "services" / "aprendizado" / "gerador_questoes.py")
+GERADOR = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(GERADOR)
+
+
+def catalogo_inicial():
+    arvore = ast.parse((ROOT / "backend" / "app.py").read_text(encoding="utf-8"))
+    for no in arvore.body:
+        if isinstance(no, ast.Assign) and any(getattr(alvo, "id", None) == "CATALOGO_INICIAL" for alvo in no.targets):
+            return ast.literal_eval(no.value)
+    raise AssertionError("CATALOGO_INICIAL não encontrado em backend/app.py")
+
+
+class TestBancoLocal(unittest.TestCase):
+    def test_sem_ia_cada_tema_recebe_so_questoes_do_proprio_assunto(self):
+        for materia, temas in catalogo_inicial().items():
+            for tema in temas:
+                with self.subTest(materia=materia, tema=tema):
+                    banco = GERADOR._banco_do_tema(tema)
+                    if banco is None:
+                        with self.assertRaises(RuntimeError):
+                            GERADOR.gerar_questoes(materia, tema, "Normal", 5)
+                        continue
+                    questoes, origem = GERADOR.gerar_questoes(materia, tema, "Normal", 20)
+                    self.assertEqual("banco_local", origem)
+                    self.assertEqual(20, len({q["enunciado"] for q in questoes}), "enunciados repetidos no mesmo desafio")
+                    self.assertTrue({q["enunciado"] for q in questoes} <= {q[0] for q in banco})
+
+    def test_falha_da_ia_vira_mensagem_amigavel(self):
+        original = GERADOR._gerar_com_openai
+
+        def ia_fora_do_ar(*_args, **_kwargs):
+            raise RuntimeError("Falha ao gerar questões pela IA: HTTP Error 401")
+
+        GERADOR._gerar_com_openai = ia_fora_do_ar
+        try:
+            with self.assertRaises(RuntimeError) as contexto:
+                GERADOR.gerar_questoes("História", "Revolução Industrial", "Normal", 5)
+            self.assertEqual(GERADOR.MENSAGEM_INDISPONIVEL, str(contexto.exception))
+            questoes, origem = GERADOR.gerar_questoes("Ciências", "Sistema solar", "Normal", 5)
+            self.assertEqual(("banco_local", 5), (origem, len(questoes)))
+        finally:
+            GERADOR._gerar_com_openai = original
+
+    def test_questoes_dos_bancos_estao_bem_formadas(self):
+        bancos = GERADOR.BANCO_TEMATICO
+        for nome, questoes in bancos.items():
+            with self.subTest(banco=nome):
+                self.assertGreaterEqual(len(questoes), 20, "o desafio maior tem 20 questões")
+                self.assertEqual(len(questoes), len({q[0] for q in questoes}), "enunciado repetido no banco")
+                for enunciado, opcoes, correta, explicacao in questoes:
+                    self.assertEqual(4, len(opcoes), enunciado)
+                    self.assertEqual(4, len(set(opcoes)), f"alternativas repetidas: {enunciado}")
+                    self.assertIn(correta, GERADOR.LETRAS, enunciado)
+                    self.assertTrue(enunciado.strip() and explicacao.strip(), enunciado)
+
+    def test_alternativa_correta_acompanha_o_embaralhamento(self):
+        respostas = {q[0]: q[1][GERADOR.LETRAS.index(q[2])] for q in GERADOR.BANCO_TEMATICO["sistema solar"]}
+        for _ in range(5):
+            for questao in GERADOR.gerar_questoes("Ciências", "Sistema solar", "Normal", 20)[0]:
+                self.assertEqual(respostas[questao["enunciado"]], questao["alternativas"][questao["alternativa_correta"]])
+
+    def test_segundo_grau_nao_recebe_questoes_de_primeiro_grau(self):
+        primeiro_grau = {q[0] for q in GERADOR.BANCO_TEMATICO["do 1º grau"]}
+        try:
+            questoes = GERADOR.gerar_questoes("Matemática", "Equações do 2º grau", "Normal", 5)[0]
+        except RuntimeError:
+            return
+        self.assertFalse(primeiro_grau & {q["enunciado"] for q in questoes})
+
+    def test_tema_sem_banco_continua_recusando_assunto_errado(self):
+        with self.assertRaises(RuntimeError):
+            GERADOR.gerar_questoes("Ciências", "Astronomia avançada", "Normal", 10)
+
+    def test_ia_tenta_de_novo_quando_a_primeira_chamada_falha(self):
+        import io
+        import json
+        from unittest import mock
+
+        questoes = [{"enunciado": f"Pergunta {n}", "alternativas": {"A": "1", "B": "2", "C": "3", "D": "4"},
+                     "alternativa_correta": "B", "explicacao": "Porque sim."} for n in range(5)]
+        corpo = json.dumps({"choices": [{"message": {"content": json.dumps({"questoes": questoes})}}]}).encode()
+        respostas = [OSError("conexão caiu"), io.BytesIO(corpo)]
+
+        def falsa_urlopen(*_args, **_kwargs):
+            resposta = respostas.pop(0)
+            if isinstance(resposta, Exception):
+                raise resposta
+            return resposta
+
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "chave-de-teste"}), \
+                mock.patch.object(GERADOR.urllib.request, "urlopen", falsa_urlopen):
+            geradas, origem = GERADOR.gerar_questoes("História", "Revolução Industrial", "Difícil", 5)
+        self.assertEqual("ia", origem)
+        self.assertEqual(["B"] * 5, [q["alternativa_correta"] for q in geradas])
+
+
+if __name__ == "__main__":
+    unittest.main()

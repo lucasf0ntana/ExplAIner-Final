@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ExplAIner | Ranking</title>
+    <link rel="stylesheet" href="vendor/fonts/fonts.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="pagina">
+        <header class="cabecalho">
+            <div class="marca">
+                <button class="botao-voltar" type="button" data-voltar data-voltar-fallback="/" aria-label="Voltar para a página anterior" title="Voltar"><span aria-hidden="true">←</span></button>
+                <span class="logo">E</span>
+                <div>
+                    <h1>ExplAIner</h1>
+                    <p>Gerenciar ranking</p>
+                </div>
+            </div>
+            <nav class="menu-navegacao">
+                <a href="index.html" class="link-navegacao">Cadastro</a>
+                <a href="ler.html" class="link-navegacao">Ler</a>
+                <a href="listar.html" class="link-navegacao">Listar</a>
+                <a href="temas.html" class="link-navegacao">Temas</a>
+                <a href="desafios.html" class="link-navegacao">Desafios</a>
+                <a href="questoes.html" class="link-navegacao">Questões</a>
+                <a href="ranking.html" class="link-navegacao ativo">Ranking</a>
+            </nav>
+        </header>
+
+        <main class="conteudo">
+            <section class="cartao">
+                <div class="intro-bloco">
+                    <p class="intro-kicker">Ranking</p>
+                    <p class="intro-text">Cadastre e acompanhe a pontuação dos alunos.</p>
+                </div>
+                <form class="grade-formulario" id="form-ranking">
+                    <label class="campo">
+                        <span>Classificação</span>
+                        <input type="number" name="classificacao" placeholder="Ex.: 1" required>
+                    </label>
+                    <label class="campo">
+                        <span>Pontos</span>
+                        <input type="number" name="pontos" placeholder="Ex.: 500" required>
+                    </label>
+                    <label class="campo">
+                        <span>ID do aluno</span>
+                        <input type="number" name="id_aluno" placeholder="Ex.: 1" required>
+                    </label>
+                    <button type="submit">Salvar ranking</button>
+                </form>
+                <div id="mensagem-ranking" class="resultado" style="display:none"></div>
+                <form class="grade-formulario" id="form-ranking-atualizar" style="margin-top: 1.5rem;">
+                    <label class="campo">
+                        <span>ID do ranking</span>
+                        <input type="number" id="ranking-id-atualizar" placeholder="Ex.: 1" required>
+                    </label>
+                    <label class="campo">
+                        <span>Nova classificação</span>
+                        <input type="number" id="ranking-classificacao-atualizar" placeholder="Deixe em branco para não alterar">
+                    </label>
+                    <label class="campo">
+                        <span>Novos pontos</span>
+                        <input type="number" id="ranking-pontos-atualizar" placeholder="Deixe em branco para não alterar">
+                    </label>
+                    <label class="campo">
+                        <span>ID do aluno</span>
+                        <input type="number" id="ranking-aluno-atualizar" placeholder="Deixe em branco para não alterar">
+                    </label>
+                    <button type="submit">Atualizar ranking</button>
+                </form>
+                <div id="mensagem-ranking-atualizar" class="resultado" style="display:none"></div>
+                <form class="grade-formulario" id="form-ranking-deletar" style="margin-top: 1.5rem;">
+                    <label class="campo">
+                        <span>ID do ranking</span>
+                        <input type="number" id="ranking-id-deletar" placeholder="Ex.: 1" required>
+                    </label>
+                    <button type="submit">Excluir ranking</button>
+                </form>
+                <div id="mensagem-ranking-deletar" class="resultado" style="display:none"></div>
+                <div class="resultado" style="margin-top: 1rem; padding: 0; border: none; overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; text-align:left;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--borda);">
+                                <th style="padding:0.7rem">ID</th>
+                                <th style="padding:0.7rem">Classificação</th>
+                                <th style="padding:0.7rem">Pontos</th>
+                                <th style="padding:0.7rem">Aluno</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lista-ranking"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="voltar.js"></script>
+<script src="ranking.js"></script>
+</body>
+</html>

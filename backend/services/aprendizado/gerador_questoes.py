@@ -1,0 +1,244 @@
+import json
+import logging
+import os
+import random
+import urllib.request
+
+LETRAS = ("A", "B", "C", "D")
+
+ROTULOS_DIFICULDADE = {"Normal": "Médio"}
+
+
+def rotulo_dificuldade(dificuldade):
+    return ROTULOS_DIFICULDADE.get(dificuldade, dificuldade)
+
+
+registro = logging.getLogger(__name__)
+
+TENTATIVAS_IA = 2
+TEMPO_LIMITE_IA = 45
+MENSAGEM_INDISPONIVEL = "Não foi possível gerar as questões agora. Tente novamente em instantes."
+
+
+def _validar_questoes(questoes, quantidade):
+    if not isinstance(questoes, list) or len(questoes) < quantidade:
+        raise ValueError("A IA não retornou a quantidade solicitada de questões.")
+    normalizadas = []
+    for item in questoes[:quantidade]:
+        enunciado = str(item.get("enunciado", "")).strip()
+        alternativas = item.get("alternativas", {})
+        correta = str(item.get("alternativa_correta", "")).upper().strip()
+        if isinstance(alternativas, list) and len(alternativas) == 4:
+            alternativas = dict(zip(LETRAS, alternativas))
+        if not enunciado or not isinstance(alternativas, dict) or any(not str(alternativas.get(letra, "")).strip() for letra in LETRAS):
+            raise ValueError("Questão incompleta recebida da IA.")
+        if correta not in LETRAS:
+            raise ValueError("Alternativa correta inválida recebida da IA.")
+        normalizadas.append({
+            "enunciado": enunciado,
+            "alternativas": {letra: str(alternativas[letra]).strip() for letra in LETRAS},
+            "alternativa_correta": correta,
+            "explicacao": str(item.get("explicacao", "")).strip() or "Revise o conceito apresentado para compreender a resposta correta.",
+        })
+    return normalizadas
+
+
+def _gerar_com_openai(materia, tema, dificuldade, quantidade, excluir_enunciados=None):
+    chave = os.getenv("OPENAI_API_KEY", "").strip()
+    if not chave:
+        return None
+    modelo = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    nivel = rotulo_dificuldade(dificuldade)
+    prompt = f"""Crie exatamente {quantidade} questões de múltipla escolha em português brasileiro.
+Matéria: {materia}. Tema específico: {tema}. Dificuldade: {nivel}.
+As questões devem ser educacionalmente corretas, distintas, relevantes ao tema e apropriadas a estudantes.
+Cada questão deve ter quatro alternativas plausíveis A, B, C e D, apenas uma correta, e explicação curta.
+Não use 'todas as anteriores' nem 'nenhuma das anteriores'. Não repita enunciados, exemplos, números, contexto ou estrutura dentro deste lote.
+Varie deliberadamente os subtemas, situações-problema, formatos de raciocínio e exemplos. Não use perguntas genéricas que só mencionem o tema no texto. TODA questão precisa testar diretamente um conceito do tema específico; se o tema for "corpo humano", não pergunte sobre planetas, clima ou fotossíntese. Antes de retornar, confira individualmente que cada enunciado, resposta e explicação pertence à matéria E ao tema. Se não houver conteúdo suficiente para criar questões corretas, gere variações de raciocínio dentro do próprio tema, nunca mude para outro assunto.
+A dificuldade precisa mudar o tipo de raciocínio: Fácil = conceitos fundamentais e identificação; Médio = aplicação, interpretação e relações entre conceitos; Difícil = análise, inferência e resolução em várias etapas. Evite reutilizar a mesma pergunta em dificuldades diferentes.
+Enunciados já usados que devem ser evitados nesta nova tentativa: {json.dumps((excluir_enunciados or [])[:80], ensure_ascii=False)}.
+Não copie nem reformule superficialmente essas perguntas; crie questões novas dentro do mesmo tema.
+Retorne exclusivamente JSON neste formato:
+{{"questoes":[{{"enunciado":"...","alternativas":{{"A":"...","B":"...","C":"...","D":"..."}},"alternativa_correta":"A","explicacao":"..."}}]}}
+"""
+    payload = {
+        "model": modelo,
+        "messages": [
+            {"role": "system", "content": "Você é um elaborador rigoroso de questões educacionais. Priorize precisão factual e siga exatamente o formato JSON solicitado."},
+            {"role": "user", "content": prompt},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.9,
+        "max_completion_tokens": min(16000, 1000 + 450 * int(quantidade)),
+    }
+    requisicao = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {chave}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    ultimo_erro = None
+    for _ in range(TENTATIVAS_IA):
+        try:
+            with urllib.request.urlopen(requisicao, timeout=TEMPO_LIMITE_IA) as resposta:
+                retorno = json.loads(resposta.read().decode("utf-8"))
+            conteudo = retorno["choices"][0]["message"]["content"]
+            return _validar_questoes(json.loads(conteudo)["questoes"], quantidade)
+        except (OSError, KeyError, IndexError, TypeError, AttributeError, ValueError) as erro:
+            ultimo_erro = erro
+    raise RuntimeError(f"Falha ao gerar questões pela IA: {ultimo_erro}") from ultimo_erro
+
+
+BANCO_TEMATICO = {
+    "corpo humano": [
+        ("Qual órgão bombeia o sangue para a circulação?", ["Pulmão", "Coração", "Estômago", "Rim"], "B", "O coração impulsiona o sangue pelos vasos sanguíneos."),
+        ("Em qual estrutura ocorre a maior parte da absorção dos nutrientes?", ["Intestino delgado", "Esôfago", "Traqueia", "Bexiga"], "A", "As vilosidades do intestino delgado ampliam a absorção dos nutrientes."),
+        ("Qual é a principal função dos alvéolos pulmonares?", ["Produzir bile", "Filtrar a urina", "Realizar trocas gasosas", "Bombear sangue"], "C", "Nos alvéolos, oxigênio e gás carbônico são trocados entre ar e sangue."),
+        ("Qual sistema coordena respostas rápidas por meio de impulsos nervosos?", ["Digestório", "Nervoso", "Urinário", "Esquelético"], "B", "O sistema nervoso transmite sinais elétricos e químicos."),
+        ("Qual célula transporta a maior parte do oxigênio no sangue?", ["Neurônio", "Hemácia", "Plaqueta", "Osteócito"], "B", "A hemoglobina das hemácias transporta a maior parte do oxigênio."),
+        ("Qual órgão produz a bile, que auxilia na digestão de gorduras?", ["Pâncreas", "Fígado", "Baço", "Rim"], "B", "O fígado produz a bile, armazenada e concentrada na vesícula biliar."),
+        ("Qual é a função principal dos rins?", ["Produzir movimentos", "Filtrar o sangue e formar urina", "Realizar trocas gasosas", "Digerir proteínas no estômago"], "B", "Os rins removem resíduos do sangue e ajudam a regular água e sais."),
+        ("Onde ocorre a troca de oxigênio e gás carbônico entre o ar e o sangue?", ["Alvéolos", "Tendões", "Ventrículos intestinais", "Articulações"], "A", "A parede fina dos alvéolos permite a difusão dos gases."),
+        ("Qual estrutura liga músculos aos ossos?", ["Ligamento", "Tendão", "Cartilagem articular", "Neurônio"], "B", "Tendões conectam músculos aos ossos e transmitem força."),
+        ("Qual tipo de músculo atua principalmente de forma involuntária no intestino?", ["Esquelético", "Liso", "Voluntário estriado", "Nenhum"], "B", "A musculatura lisa movimenta o conteúdo do tubo digestório involuntariamente."),
+        ("Qual parte do cérebro participa de forma importante do equilíbrio e da coordenação?", ["Cerebelo", "Hipófise", "Medula óssea", "Laringe"], "A", "O cerebelo contribui para coordenação motora, postura e equilíbrio."),
+        ("Qual componente do sangue participa da coagulação?", ["Plaquetas", "Alvéolos", "Bile", "Neurônios"], "A", "As plaquetas ajudam a formar o tampão inicial na coagulação."),
+        ("Qual é a sequência correta do caminho do alimento após a boca?", ["Faringe, esôfago, estômago", "Traqueia, pulmão, estômago", "Rim, ureter, bexiga", "Coração, artéria, estômago"], "A", "Após a boca, o alimento passa pela faringe, esôfago e estômago."),
+        ("Que estrutura protege o cérebro?", ["Costelas", "Crânio", "Pelve", "Esterno"], "B", "Os ossos do crânio envolvem e protegem o encéfalo."),
+        ("Qual hormônio ajuda a reduzir a glicose no sangue?", ["Insulina", "Adrenalina", "Melatonina", "Tiroxina"], "A", "A insulina favorece a entrada de glicose em células e reduz sua concentração sanguínea."),
+        ("Por que a frequência cardíaca aumenta durante exercícios?", ["O corpo precisa levar mais oxigênio aos tecidos", "Os rins param de funcionar", "O estômago passa a respirar", "Os ossos produzem ar"], "A", "Os músculos ativos precisam de mais oxigênio e nutrientes, exigindo maior fluxo sanguíneo."),
+        ("Como o diafragma contribui para a inspiração?", ["Contrai e aumenta o volume torácico", "Fecha os rins", "Diminui a caixa torácica ao relaxar", "Impede o ar de entrar"], "A", "Ao contrair, o diafragma desce e amplia o volume do tórax."),
+        ("O que acontece com a urina antes de chegar à bexiga?", ["Passa pelos ureteres", "Passa pela traqueia", "Vai pelo esôfago", "É bombeada pela aorta"], "A", "Os ureteres conduzem a urina dos rins até a bexiga."),
+        ("Qual relação descreve corretamente neurônios e sinapses?", ["Sinapses permitem comunicação entre células nervosas", "Sinapses filtram a urina", "Neurônios produzem bile", "Neurônios são ossos"], "A", "Sinapses são regiões de comunicação entre neurônios ou entre neurônios e outras células."),
+        ("Por que as articulações são importantes para o movimento?", ["Permitem conexão e movimento relativo entre ossos", "Produzem glóbulos vermelhos em todos os casos", "Bombeiam sangue", "Fazem a digestão química"], "A", "As articulações conectam ossos e permitem movimentos de diferentes amplitudes."),
+    ],
+    "do 1º grau": [
+        ("Resolva: x + 7 = 15.", ["6", "7", "8", "22"], "C", "Subtraindo 7 dos dois membros: x = 15 − 7 = 8."),
+        ("Resolva: 2x = 18.", ["6", "9", "16", "36"], "B", "Dividindo os dois membros por 2: x = 9."),
+        ("Resolva: 3x − 4 = 11.", ["3", "5", "7", "15"], "B", "Somando 4: 3x = 15; dividindo por 3: x = 5."),
+        ("Resolva: 5x + 10 = 0.", ["−2", "−5", "2", "10"], "A", "Subtraindo 10: 5x = −10; dividindo por 5: x = −2."),
+        ("Resolva: x/4 = 6.", ["1,5", "10", "24", "2"], "C", "Multiplicando os dois membros por 4: x = 24."),
+        ("Resolva: 2(x + 3) = 14.", ["4", "5", "7", "11"], "A", "Dividindo por 2: x + 3 = 7; logo x = 4."),
+        ("Resolva: 4x − 3 = 2x + 9.", ["3", "4", "6", "12"], "C", "Agrupando: 4x − 2x = 9 + 3, então 2x = 12 e x = 6."),
+        ("Qual valor de x satisfaz 7 − x = 2?", ["−5", "2", "5", "9"], "C", "7 − x = 2 → −x = −5 → x = 5."),
+        ("O triplo de um número menos 5 é igual a 16. Qual é o número?", ["5", "7", "11", "21"], "B", "3n − 5 = 16 → 3n = 21 → n = 7."),
+        ("A soma de um número com o seu dobro é 27. Qual é o número?", ["7", "9", "13,5", "18"], "B", "n + 2n = 27 → 3n = 27 → n = 9."),
+        ("Em uma equação do 1º grau, qual é o maior expoente da incógnita?", ["0", "1", "2", "3"], "B", "Na equação do 1º grau a incógnita aparece com expoente 1, como em ax + b = 0."),
+        ("Qual destas é uma equação do 1º grau?", ["x² + 1 = 5", "3x − 2 = 7", "x³ = 8", "√x = 4"], "B", "Em 3x − 2 = 7 a incógnita tem expoente 1; as outras têm expoente 2, 3 ou raiz."),
+        ("Resolva: (x − 1)/3 = 4.", ["11", "12", "13", "15"], "C", "Multiplicando por 3: x − 1 = 12; logo x = 13."),
+        ("Resolva: −2x + 8 = 2.", ["−3", "3", "5", "−5"], "B", "Subtraindo 8: −2x = −6; dividindo por −2: x = 3."),
+        ("João tem R$ 50 e gasta R$ 8 por dia. Depois de quantos dias ficará com R$ 10?", ["4", "5", "6", "8"], "B", "50 − 8d = 10 → 8d = 40 → d = 5."),
+        ("Resolva: 0,5x = 7.", ["3,5", "7,5", "14", "0,07"], "C", "Dividindo por 0,5 (o mesmo que multiplicar por 2): x = 14."),
+        ("Qual é a raiz da equação 6x + 6 = 6?", ["−1", "0", "1", "6"], "B", "6x + 6 = 6 → 6x = 0 → x = 0."),
+        ("Ao resolver 3x + 2 = 3x + 5, o que se conclui?", ["x = 1", "x = 0", "A equação não tem solução", "Todo número é solução"], "C", "Subtraindo 3x dos dois lados sobra 2 = 5, o que é falso: não existe x que satisfaça a equação."),
+        ("O perímetro de um retângulo é 30 cm e o comprimento é 9 cm. Qual é a largura?", ["6 cm", "12 cm", "15 cm", "21 cm"], "A", "2 × (9 + L) = 30 → 9 + L = 15 → L = 6 cm."),
+        ("Para isolar x em x + 12 = 20, qual operação deve ser feita nos dois membros?", ["Somar 12", "Subtrair 12", "Multiplicar por 12", "Dividir por 12"], "B", "Subtraindo 12 dos dois membros mantém-se a igualdade e obtém-se x = 8."),
+    ],
+    "figuras de linguagem": [
+        ("Em \"Seus olhos são duas estrelas\", qual figura de linguagem aparece?", ["Metáfora", "Comparação", "Hipérbole", "Eufemismo"], "A", "Há uma comparação implícita, sem conectivo como \"como\": isso é metáfora."),
+        ("Em \"Ela é forte como um touro\", qual figura de linguagem aparece?", ["Comparação", "Metáfora", "Ironia", "Metonímia"], "A", "O conectivo \"como\" torna a comparação explícita."),
+        ("Em \"Já te disse isso um milhão de vezes\", qual figura de linguagem aparece?", ["Hipérbole", "Eufemismo", "Prosopopeia", "Antítese"], "A", "Há um exagero intencional para dar ênfase: hipérbole."),
+        ("Em \"O vento sussurrava segredos às árvores\", qual figura de linguagem aparece?", ["Personificação (prosopopeia)", "Hipérbole", "Metonímia", "Pleonasmo"], "A", "O vento recebe uma ação humana, sussurrar: personificação."),
+        ("Em \"Ele partiu desta para melhor\", dito sobre alguém que morreu, qual figura aparece?", ["Eufemismo", "Hipérbole", "Ironia", "Catacrese"], "A", "A expressão suaviza uma ideia dolorosa: eufemismo."),
+        ("Em \"Que belo trabalho! Você quebrou tudo\", qual figura de linguagem aparece?", ["Ironia", "Comparação", "Metáfora", "Aliteração"], "A", "Diz-se o contrário do que se pensa: ironia."),
+        ("Em \"Li Machado de Assis nas férias\", referindo-se às obras do autor, qual figura aparece?", ["Metonímia", "Metáfora", "Hipérbole", "Antítese"], "A", "O autor é usado no lugar da obra: metonímia."),
+        ("Em \"Ele ria por fora e chorava por dentro\", há oposição de ideias. Qual figura aparece?", ["Antítese", "Eufemismo", "Metonímia", "Pleonasmo"], "A", "A aproximação de ideias opostas (rir e chorar, fora e dentro) é antítese."),
+        ("Em \"O silêncio ensurdecedor tomou conta da sala\", qual figura de linguagem aparece?", ["Paradoxo", "Eufemismo", "Metonímia", "Catacrese"], "A", "Ideias contraditórias reunidas no mesmo termo (silêncio que ensurdece) formam um paradoxo."),
+        ("\"Subir para cima\" é exemplo de qual figura de linguagem?", ["Pleonasmo", "Metáfora", "Ironia", "Eufemismo"], "A", "Repete-se uma ideia já contida no verbo: pleonasmo (vicioso, neste caso)."),
+        ("Em \"O pé da mesa quebrou\", qual figura de linguagem aparece?", ["Catacrese", "Hipérbole", "Ironia", "Antítese"], "A", "Uma metáfora já incorporada ao uso, por falta de termo próprio, é catacrese."),
+        ("Em \"O rato roeu a roupa do rei de Roma\", qual recurso sonoro predomina?", ["Aliteração", "Assonância", "Onomatopeia", "Eufemismo"], "A", "A repetição do som consonantal /r/ caracteriza a aliteração."),
+        ("Em \"O tique-taque do relógio me acordou\", qual figura de linguagem aparece?", ["Onomatopeia", "Metonímia", "Antítese", "Eufemismo"], "A", "\"Tique-taque\" imita um som: onomatopeia."),
+        ("Qual é a principal diferença entre comparação e metáfora?", ["A comparação usa conectivo como \"como\"; a metáfora não", "A metáfora sempre usa \"como\"", "Não há diferença entre elas", "A comparação exagera e a metáfora suaviza"], "A", "As duas aproximam elementos por semelhança, mas só a comparação explicita o conectivo."),
+        ("Qual figura de linguagem consiste em um exagero intencional?", ["Hipérbole", "Eufemismo", "Pleonasmo", "Catacrese"], "A", "A hipérbole amplia ou exagera algo para dar ênfase."),
+        ("Qual figura de linguagem suaviza uma ideia desagradável?", ["Eufemismo", "Hipérbole", "Ironia", "Aliteração"], "A", "O eufemismo troca uma expressão dura por outra mais branda."),
+        ("Em \"Bebi dois copos de água\", qual figura de linguagem aparece?", ["Metonímia", "Hipérbole", "Pleonasmo", "Antítese"], "A", "Usa-se o recipiente (copo) no lugar do conteúdo (água): metonímia."),
+        ("Como se chama a repetição de sons vocálicos em um verso ou frase?", ["Assonância", "Aliteração", "Onomatopeia", "Hipérbato"], "A", "Assonância repete vogais; aliteração repete consoantes."),
+        ("A inversão da ordem direta da frase, como em \"Ao parque fomos nós ontem\", chama-se:", ["Hipérbato", "Pleonasmo", "Eufemismo", "Catacrese"], "A", "O hipérbato altera a ordem sujeito-verbo-complemento."),
+        ("Em \"Ela tinha uma voz doce e aveludada\", qual figura de linguagem aparece?", ["Sinestesia", "Hipérbole", "Antítese", "Metonímia"], "A", "A voz (audição) é descrita com termos do paladar e do tato: sinestesia."),
+    ],
+    "sistema solar": [
+        ("Qual é a estrela do Sistema Solar?", ["Sol", "Sirius", "Lua", "Estrela Polar"], "A", "O Sol é a única estrela do Sistema Solar; os planetas giram ao seu redor."),
+        ("Qual planeta é o mais próximo do Sol?", ["Mercúrio", "Vênus", "Terra", "Marte"], "A", "A ordem a partir do Sol começa por Mercúrio, Vênus, Terra e Marte."),
+        ("Qual é o maior planeta do Sistema Solar?", ["Júpiter", "Saturno", "Netuno", "Terra"], "A", "Júpiter é o maior planeta, um gigante gasoso com mais de 11 vezes o diâmetro da Terra."),
+        ("Qual planeta é mais conhecido pelos seus anéis bem visíveis?", ["Saturno", "Marte", "Mercúrio", "Vênus"], "A", "Os gigantes têm anéis, mas os de Saturno são os mais extensos e visíveis."),
+        ("Quantos planetas tem o Sistema Solar segundo a classificação da União Astronômica Internacional de 2006?", ["8", "9", "7", "10"], "A", "Desde 2006 são oito planetas; Plutão passou a ser planeta anão."),
+        ("Por que Plutão deixou de ser classificado como planeta em 2006?", ["Não domina gravitacionalmente a vizinhança da sua órbita", "Deixou de orbitar o Sol", "É maior que a Terra", "Não tem gravidade"], "A", "Plutão orbita o Sol e é arredondado, mas divide a órbita com outros corpos: é um planeta anão."),
+        ("Qual é o planeta mais quente do Sistema Solar?", ["Vênus", "Mercúrio", "Marte", "Júpiter"], "A", "A atmosfera densa de gás carbônico de Vênus causa um efeito estufa intenso, mais quente até que Mercúrio."),
+        ("O que é a Lua em relação à Terra?", ["Um satélite natural", "Um planeta anão", "Uma estrela", "Um cometa"], "A", "A Lua orbita a Terra e é seu único satélite natural."),
+        ("Quanto tempo a Terra leva, aproximadamente, para dar uma volta completa ao redor do Sol?", ["365 dias", "24 horas", "30 dias", "12 horas"], "A", "A translação dura cerca de 365 dias e 6 horas; as 24 horas são a rotação."),
+        ("Entre quais planetas fica o cinturão de asteroides principal?", ["Marte e Júpiter", "Terra e Marte", "Júpiter e Saturno", "Vênus e Terra"], "A", "O cinturão principal fica entre as órbitas de Marte e Júpiter."),
+        ("Quais são os planetas rochosos (telúricos) do Sistema Solar?", ["Mercúrio, Vênus, Terra e Marte", "Júpiter, Saturno, Urano e Netuno", "Apenas a Terra", "Saturno e Urano"], "A", "Os quatro planetas internos são rochosos; os externos são gigantes gasosos ou gelados."),
+        ("A cor avermelhada de Marte se deve principalmente a quê?", ["Óxido de ferro na superfície", "Lava ativa em toda a superfície", "Reflexo da luz de Júpiter", "Excesso de oxigênio na atmosfera"], "A", "A poeira rica em óxido de ferro, semelhante à ferrugem, dá a cor avermelhada."),
+        ("Qual planeta gira \"deitado\", com o eixo de rotação inclinado em cerca de 98°?", ["Urano", "Netuno", "Marte", "Vênus"], "A", "Urano tem o eixo quase paralelo ao plano da órbita."),
+        ("O que mantém os planetas em órbita ao redor do Sol?", ["A gravidade", "O magnetismo da Terra", "O vento solar", "A pressão atmosférica"], "A", "A atração gravitacional do Sol curva a trajetória dos planetas em órbitas."),
+        ("O que é um cometa?", ["Um corpo de gelo e poeira que pode formar cauda perto do Sol", "Uma estrela pequena", "Um satélite da Terra", "Um planeta sem órbita"], "A", "Ao se aproximar do Sol, o gelo do cometa sublima e forma a cabeleira e a cauda."),
+        ("Qual é o planeta mais distante do Sol?", ["Netuno", "Urano", "Plutão", "Saturno"], "A", "Netuno é o oitavo e último planeta; Plutão é classificado como planeta anão."),
+        ("Em qual galáxia está o Sistema Solar?", ["Via Láctea", "Andrômeda", "Grande Nuvem de Magalhães", "Galáxia do Triângulo"], "A", "O Sistema Solar fica em um dos braços da Via Láctea."),
+        ("Quanto tempo, aproximadamente, a luz do Sol leva para chegar à Terra?", ["Cerca de 8 minutos", "Cerca de 1 segundo", "Cerca de 1 dia", "Cerca de 1 ano"], "A", "A cerca de 150 milhões de km, a luz leva aproximadamente 8 minutos e 20 segundos."),
+        ("Qual é o maior satélite natural do Sistema Solar?", ["Ganimedes", "Lua", "Titã", "Europa"], "A", "Ganimedes, lua de Júpiter, é o maior satélite natural, maior até que Mercúrio."),
+        ("Por que a Lua apresenta fases?", ["Porque vemos partes diferentes da sua face iluminada pelo Sol conforme ela orbita a Terra", "Porque a sombra da Terra a cobre todo mês", "Porque ela muda de tamanho", "Porque ela produz luz própria variável"], "A", "A Lua reflete a luz do Sol; o ângulo entre Sol, Terra e Lua muda a parte iluminada que vemos."),
+    ],
+    "brasil col": [
+        ("Em que ano a frota de Pedro Álvares Cabral chegou ao território que hoje é o Brasil?", ["1500", "1492", "1532", "1822"], "A", "A frota chegou em abril de 1500; 1492 é a chegada de Colombo à América."),
+        ("Qual foi o primeiro produto explorado economicamente pelos portugueses no Brasil?", ["Pau-brasil", "Café", "Ouro", "Borracha"], "A", "O pau-brasil, usado como corante, foi explorado desde as primeiras décadas."),
+        ("O que foram as capitanias hereditárias?", ["Grandes faixas de terra entregues a donatários para colonizar", "Cidades fundadas pelos indígenas", "Impostos sobre o ouro", "Missões jesuíticas"], "A", "A partir de 1534, a Coroa dividiu o território em faixas doadas a donatários."),
+        ("Qual foi a primeira capital do Brasil colonial?", ["Salvador", "Rio de Janeiro", "São Paulo", "Recife"], "A", "Salvador foi fundada em 1549 como sede do Governo-Geral; a capital só passou ao Rio em 1763."),
+        ("Qual cultura foi a base da economia do Nordeste colonial nos séculos XVI e XVII?", ["Cana-de-açúcar", "Café", "Algodão", "Cacau"], "A", "O açúcar produzido nos engenhos era o principal produto de exportação."),
+        ("Como se chamava a unidade de produção de açúcar, com moenda e casa de purgar?", ["Engenho", "Quilombo", "Bandeira", "Missão"], "A", "O engenho reunia a plantação, a moenda e as instalações de fabrico do açúcar."),
+        ("Qual foi a principal mão de obra na produção açucareira colonial?", ["Pessoas africanas escravizadas", "Imigrantes europeus assalariados", "Trabalhadores japoneses", "Operários de fábricas"], "A", "A economia açucareira dependeu do trabalho de africanos escravizados trazidos pelo tráfico."),
+        ("O que eram os quilombos?", ["Comunidades formadas por pessoas que resistiam à escravidão", "Fazendas de gado", "Fortes portugueses", "Escolas jesuíticas"], "A", "Os quilombos reuniam principalmente pessoas que fugiam da escravidão."),
+        ("Qual foi o quilombo mais conhecido do período colonial?", ["Palmares", "Canudos", "Contestado", "Caldeirão"], "A", "Palmares, na Serra da Barriga, resistiu por quase um século; Canudos e Contestado são do período republicano."),
+        ("No século XVIII, a descoberta de ouro deslocou o centro econômico da colônia para qual região?", ["Minas Gerais", "Amazônia", "Rio Grande do Sul", "Pernambuco"], "A", "A mineração concentrou população e riqueza nas Minas Gerais."),
+        ("O que foram as bandeiras?", ["Expedições ao interior em busca de riquezas e de indígenas para escravizar", "Revoltas a favor da independência", "Navios de guerra holandeses", "Festas religiosas"], "A", "Partindo principalmente de São Paulo, as bandeiras exploraram o interior e ampliaram o território."),
+        ("Qual ordem religiosa teve papel central na catequese dos indígenas no início da colonização?", ["Companhia de Jesus (jesuítas)", "Ordem dos Templários", "Ordem de Malta", "Ordem Teutônica"], "A", "Os jesuítas chegaram em 1549 e fundaram colégios e aldeamentos."),
+        ("Qual país europeu ocupou parte do Nordeste no século XVII, com destaque para Pernambuco?", ["Holanda (Províncias Unidas)", "França", "Inglaterra", "Espanha"], "A", "Os holandeses dominaram Pernambuco e áreas vizinhas entre 1630 e 1654."),
+        ("Quem governou o Brasil holandês e incentivou as artes e as ciências em Recife?", ["Maurício de Nassau", "Tomé de Sousa", "Tiradentes", "Duarte Coelho"], "A", "João Maurício de Nassau governou de 1637 a 1644 e modernizou Recife."),
+        ("O que foi a Inconfidência Mineira (1789)?", ["Uma conspiração contra o domínio português em Minas Gerais", "Uma revolta de escravizados em Salvador", "Um tratado de paz com a Holanda", "A fundação de São Paulo"], "A", "Os inconfidentes, insatisfeitos com os impostos, planejavam romper com Portugal."),
+        ("Qual inconfidente foi executado em 1792 e se tornou símbolo da conspiração?", ["Tiradentes", "Zumbi", "Padre Antônio Vieira", "Dom João VI"], "A", "Joaquim José da Silva Xavier, o Tiradentes, foi enforcado no Rio de Janeiro em 1792."),
+        ("O que era o \"quinto\" no período da mineração?", ["Um imposto que destinava 20% do ouro extraído à Coroa", "Um tipo de engenho", "Uma capitania", "Uma moeda indígena"], "A", "O quinto correspondia a um quinto, ou 20%, do ouro."),
+        ("Com que objetivo principal foi criado o Governo-Geral em 1548-1549?", ["Centralizar a administração da colônia", "Declarar a independência", "Abolir a escravidão", "Dividir a colônia com a Espanha"], "A", "Diante das dificuldades das capitanias, a Coroa criou um governo central, com Tomé de Sousa."),
+        ("Qual tratado de 1494 dividiu entre Portugal e Espanha as terras descobertas e a descobrir?", ["Tratado de Tordesilhas", "Tratado de Madri", "Tratado de Versalhes", "Tratado de Methuen"], "A", "Tordesilhas traçou uma linha imaginária a 370 léguas a oeste de Cabo Verde."),
+        ("Qual acontecimento de 1808 mudou profundamente a situação da colônia?", ["A chegada da família real portuguesa ao Brasil", "A abolição da escravidão", "A proclamação da República", "A descoberta do ouro"], "A", "Fugindo das tropas de Napoleão, a corte se instalou no Rio e abriu os portos às nações amigas."),
+    ],
+}
+
+BANCO_TEMATICO["primeiro grau"] = BANCO_TEMATICO["do 1º grau"]
+BANCO_TEMATICO["do 1o grau"] = BANCO_TEMATICO["do 1º grau"]
+
+
+def _banco_do_tema(tema):
+    tema_normalizado = str(tema or "").strip().casefold()
+    return next((questoes for nome, questoes in BANCO_TEMATICO.items() if nome in tema_normalizado), None)
+
+
+def _gerar_local(tema, quantidade, excluir_enunciados=None):
+    base = _banco_do_tema(tema)
+    if not base or len(base) < quantidade:
+        raise RuntimeError(MENSAGEM_INDISPONIVEL)
+    excluir = {str(texto).strip().casefold() for texto in (excluir_enunciados or []) if texto}
+    novas = [questao for questao in base if questao[0].strip().casefold() not in excluir]
+    antigas = [questao for questao in base if questao[0].strip().casefold() in excluir]
+    random.shuffle(novas)
+    random.shuffle(antigas)
+    saida = []
+    for enunciado, opcoes, correta, explicacao in (novas + antigas)[:quantidade]:
+        opcoes = list(opcoes)
+        resposta_correta = opcoes[LETRAS.index(correta)]
+        random.shuffle(opcoes)
+        saida.append({
+            "enunciado": enunciado,
+            "alternativas": dict(zip(LETRAS, opcoes)),
+            "alternativa_correta": LETRAS[opcoes.index(resposta_correta)],
+            "explicacao": explicacao,
+        })
+    return saida
+
+
+def gerar_questoes(materia, tema, dificuldade, quantidade, excluir_enunciados=None):
+    try:
+        geradas = _gerar_com_openai(materia, tema, dificuldade, quantidade, excluir_enunciados)
+        if geradas:
+            return geradas, "ia"
+    except RuntimeError as erro:
+        registro.warning("%s", erro)
+    return _gerar_local(tema, quantidade, excluir_enunciados), "banco_local"
