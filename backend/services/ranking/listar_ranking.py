@@ -1,8 +1,7 @@
-from models.model_ranking import Ranking
+from repositories.ranking_repository import RankingRepository
+
 
 class ListarRankingService:
+
     def executar(self):
-        # Retorna ordenado pela classificação/pontuação
-        rankings = Ranking.query.order_by(Ranking.pontos.desc()).all()
-        return [r.to_dict() for r in rankings]
-        
+        return [ranking.to_dict() for ranking in RankingRepository.listar()]

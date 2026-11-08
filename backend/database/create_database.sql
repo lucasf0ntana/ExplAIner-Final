@@ -1,80 +1,110 @@
-create database ExplAIner;
+CREATE DATABASE IF NOT EXISTS ExplAIner CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-use ExplAIner;
+USE ExplAIner;
 
-create table Aluno(
-    id_aluno int auto_increment primary key,
-    nome varchar(100) not null,
-    email varchar(120) unique not null,
-    senha varchar(255) not null,
-    data_nascimento date,
-    pontos int default 0,
-    foguinho int default 0
-)engine=innodb;
+CREATE TABLE IF NOT EXISTS Aluno (
+    id_aluno INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    email VARCHAR(120) NOT NULL UNIQUE,
+    senha VARCHAR(255) NOT NULL,
+    data_nascimento DATE,
+    pontos INT DEFAULT 0,
+    foguinho INT DEFAULT 0,
+    nick VARCHAR(40),
+    minutos_ativos INT NOT NULL DEFAULT 0,
+    ultimo_dia_ativo VARCHAR(10),
+    sequencia_atual INT NOT NULL DEFAULT 0,
+    melhor_sequencia INT NOT NULL DEFAULT 0,
+    ultimo_heartbeat DOUBLE,
+    segundos_pendentes INT NOT NULL DEFAULT 0,
+    termos_aceitos_em DATETIME,
+    versao_termos VARCHAR(20)
+) ENGINE=InnoDB;
 
-create table Tema(
-    id_tema int auto_increment primary key,
-    materia varchar(60) not null,
-    nome varchar(100) not null
-)engine=innodb;
+CREATE TABLE IF NOT EXISTS Tema (
+    id_tema INT AUTO_INCREMENT PRIMARY KEY,
+    materia VARCHAR(60) NOT NULL,
+    nome VARCHAR(100) NOT NULL
+) ENGINE=InnoDB;
 
-create table Questao(
-    id_questao int auto_increment primary key,
-    enunciado text not null,
-    alternativa_correta char(1),
-    id_tema int not null,
-    foreign key(id_tema) references tema(id_tema)
-)engine=innodb;
+CREATE TABLE IF NOT EXISTS Questao (
+    id_questao INT AUTO_INCREMENT PRIMARY KEY,
+    enunciado TEXT NOT NULL,
+    alternativa_correta CHAR(1),
+    id_tema INT NOT NULL,
+    alternativas_json TEXT,
+    explicacao TEXT,
+    FOREIGN KEY (id_tema) REFERENCES Tema(id_tema)
+) ENGINE=InnoDB;
 
-create table Desafio(
-    id_desafio int auto_increment primary key,
-    nome varchar(100),
-    dificuldade varchar(20),
-    pontuacao int,
-    quantidade_questoes int,
-    data_criacao date
-)engine=innodb;
+CREATE TABLE IF NOT EXISTS desafio (
+    id_desafio INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    dificuldade VARCHAR(120) NOT NULL,
+    pontuacao INT NOT NULL,
+    quantidade_questoes INT,
+    data_criacao DATE,
+    id_tema INT,
+    id_aluno INT,
+    nivel_mapa INT NOT NULL DEFAULT 1,
+    origem_ia BOOLEAN NOT NULL DEFAULT FALSE,
+    FOREIGN KEY (id_tema) REFERENCES Tema(id_tema),
+    FOREIGN KEY (id_aluno) REFERENCES Aluno(id_aluno)
+) ENGINE=InnoDB;
 
-create table desafio_questao(
-    id_desafio int,
-    id_questao int,
-    primary key(id_desafio,id_questao),
-    foreign key(id_desafio) references desafio(id_desafio),
-    foreign key(id_questao) references questao(id_questao)
-)engine=innodb;
+CREATE TABLE IF NOT EXISTS desafio_questao (
+    id_desafio INT NOT NULL,
+    id_questao INT NOT NULL,
+    PRIMARY KEY (id_desafio, id_questao),
+    FOREIGN KEY (id_desafio) REFERENCES desafio(id_desafio),
+    FOREIGN KEY (id_questao) REFERENCES Questao(id_questao)
+) ENGINE=InnoDB;
 
-create table aluno_desafio(
-    id_aluno int,
-    id_desafio int,
-    data_realizacao date,
-    pontuacao_obtida int,
-    concluido boolean,
-    primary key(id_aluno,id_desafio),
-    foreign key(id_aluno) references aluno(id_aluno),
-    foreign key(id_desafio) references desafio(id_desafio)
-)engine=innodb;
+CREATE TABLE IF NOT EXISTS aluno_desafio (
+    id_aluno INT NOT NULL,
+    id_desafio INT NOT NULL,
+    data_realizacao DATE,
+    pontuacao_obtida INT DEFAULT 0,
+    concluido BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (id_aluno, id_desafio),
+    FOREIGN KEY (id_aluno) REFERENCES Aluno(id_aluno),
+    FOREIGN KEY (id_desafio) REFERENCES desafio(id_desafio)
+) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS resposta_desafio (
+    id_resposta INT AUTO_INCREMENT PRIMARY KEY,
+    id_aluno INT NOT NULL,
+    id_desafio INT NOT NULL,
+    id_questao INT NOT NULL,
+    alternativa_escolhida CHAR(1) NOT NULL,
+    correta BOOLEAN NOT NULL DEFAULT FALSE,
+    pontos_ganhos INT NOT NULL DEFAULT 0,
+    segundos_gastos INT NOT NULL DEFAULT 0,
+    data_resposta DATETIME NOT NULL,
+    CONSTRAINT uq_resposta_aluno_desafio_questao UNIQUE (id_aluno, id_desafio, id_questao),
+    INDEX ix_resposta_desafio_id_aluno (id_aluno),
+    INDEX ix_resposta_desafio_id_desafio (id_desafio),
+    FOREIGN KEY (id_aluno) REFERENCES Aluno(id_aluno),
+    FOREIGN KEY (id_desafio) REFERENCES desafio(id_desafio),
+    FOREIGN KEY (id_questao) REFERENCES Questao(id_questao)
+) ENGINE=InnoDB;
 
-create table Ranking(
-    id_ranking int auto_increment primary key,
-    classificacao int,
-    pontos int,
-    id_aluno int not null,
-    foreign key(id_aluno) references aluno(id_aluno)
-)engine=innodb;
-
-
-
-
+CREATE TABLE IF NOT EXISTS Ranking (
+    id_ranking INT AUTO_INCREMENT PRIMARY KEY,
+    classificacao INT,
+    pontos INT,
+    id_aluno INT NOT NULL,
+    FOREIGN KEY (id_aluno) REFERENCES Aluno(id_aluno)
+) ENGINE=InnoDB;
 
 DROP PROCEDURE IF EXISTS sp_ranking_alunos;
 
-DELIMITER /
+DELIMITER //
 CREATE PROCEDURE sp_ranking_alunos()
 BEGIN
-    SELECT classificacao, pontos, nome 
+    SELECT Ranking.classificacao, Ranking.pontos, Aluno.nome
     FROM Ranking
-    JOIN Aluno USING(id_aluno)
-    ORDER BY pontos DESC, classificacao DESC;
-END /
+    JOIN Aluno ON Ranking.id_aluno = Aluno.id_aluno
+    ORDER BY Ranking.pontos DESC, Ranking.classificacao DESC;
+END //
 DELIMITER ;

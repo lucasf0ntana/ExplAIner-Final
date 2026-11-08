@@ -1,4 +1,7 @@
+import json
+
 from .database import db
+
 
 class Questao(db.Model):
     __tablename__ = "Questao"
@@ -7,27 +10,8 @@ class Questao(db.Model):
     enunciado = db.Column(db.Text, nullable=False)
     alternativa_correta = db.Column(db.String(1), nullable=True)
     id_tema = db.Column(db.Integer, db.ForeignKey("Tema.id_tema"), nullable=False)
-
-    def salvar(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def atualizar(self, enunciado=None, alternativa_correta=None, id_tema=None):
-        if enunciado is not None:
-            self.enunciado = enunciado
-        if alternativa_correta is not None:
-            self.alternativa_correta = alternativa_correta
-        if id_tema is not None:
-            self.id_tema = id_tema
-        db.session.commit()
-
-    def deletar(self):
-        db.session.delete(self)
-        db.session.commit()
-
-    @staticmethod
-    def buscar_por_id(id_questao):
-        return Questao.query.get(id_questao)
+    alternativas_json = db.Column(db.Text, nullable=True)
+    explicacao = db.Column(db.Text, nullable=True)
 
     def to_dict(self):
         return {
@@ -35,4 +19,6 @@ class Questao(db.Model):
             "enunciado": self.enunciado,
             "alternativa_correta": self.alternativa_correta,
             "id_tema": self.id_tema,
+            "alternativas": json.loads(self.alternativas_json) if self.alternativas_json else {},
+            "explicacao": self.explicacao,
         }

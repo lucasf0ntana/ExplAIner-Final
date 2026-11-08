@@ -1,17 +1,19 @@
-from models.model_aluno_desafio import AlunoDesafio
+from repositories.aluno_desafio_repository import AlunoDesafioRepository
+from repositories.transacao import Transacao
+from services.atualizacao import aplicar_campos, converter_data
+
 
 class AtualizarAlunoDesafioService:
-    def executar(self, id_aluno, id_desafio, dados):
-        relacao = AlunoDesafio.query.filter_by(
-            id_aluno=id_aluno, id_desafio=id_desafio
-        ).first()
 
-        if not relacao:
+    def executar(self, id_aluno, id_desafio, dados):
+        registro = AlunoDesafioRepository.buscar(id_aluno, id_desafio)
+        if not registro:
             return None
 
-        relacao.atualizar(
-            data_realizacao=dados.get("data_realizacao"),
-            pontuacao_obtida=dados.get("pontuacao_obtida"),
-            concluido=dados.get("concluido")
-        )
-        return relacao.to_dict()
+        aplicar_campos(registro, {
+            "data_realizacao": converter_data(dados.get("data_realizacao"), "A data de realização"),
+            "pontuacao_obtida": dados.get("pontuacao_obtida"),
+            "concluido": dados.get("concluido"),
+        })
+        Transacao.confirmar()
+        return registro.to_dict()

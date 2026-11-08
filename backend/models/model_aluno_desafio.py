@@ -1,5 +1,6 @@
 from .database import db
 
+
 class AlunoDesafio(db.Model):
     __tablename__ = "aluno_desafio"
 
@@ -8,23 +9,6 @@ class AlunoDesafio(db.Model):
     data_realizacao = db.Column(db.Date, nullable=True)
     pontuacao_obtida = db.Column(db.Integer, default=0)
     concluido = db.Column(db.Boolean, default=False)
-
-    def salvar(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def atualizar(self, data_realizacao=None, pontuacao_obtida=None, concluido=None):
-        if data_realizacao is not None:
-            self.data_realizacao = data_realizacao
-        if pontuacao_obtida is not None:
-            self.pontuacao_obtida = pontuacao_obtida
-        if concluido is not None:
-            self.concluido = concluido
-        db.session.commit()
-
-    def deletar(self):
-        db.session.delete(self)
-        db.session.commit()
 
     def to_dict(self):
         return {
